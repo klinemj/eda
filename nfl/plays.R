@@ -7,6 +7,7 @@ library(lubridate)
 library(ggplot2)
 library(nflfastR)
 library(gmodels)
+library(openxlsx)
 
 #Load data
 seasons <- 2010:2021
@@ -27,7 +28,7 @@ pbp1 = pbp %>% filter(season_type=="REG", play_type !='no_play', play_type !='ki
 
 
 #Get number of plays and other metrics for every season, game, quarter, team
-off_stats=sqldf("select season_str, game_id, qtr, posteam, count(play_id)as plays, sum(rush_attempt)as runs,
+off_stats=sqldf("select season_str, week, game_id, qtr, posteam, count(play_id)as plays, sum(rush_attempt)as runs,
       sum(pass_attempt)as passes, sum(passing_yards)as passing_yds, sum(rushing_yards)as rushing_yds,
       sum(yards_gained)as yds, sum(success)as successful_plays,
       sum(case when rush=1 then success else 0 end)as rush_success,
@@ -35,11 +36,34 @@ off_stats=sqldf("select season_str, game_id, qtr, posteam, count(play_id)as play
       sum(case when rush=1 and rushing_yards>=10 then 1 else 0 end)as xpl_runs,
       sum(case when pass=1 and passing_yards>=15 then 1 else 0 end)as xpl_passes
       from pbp1
-      group by season_str, game_id, qtr, posteam 
-      order by season_str, game_id, qtr, posteam ")
+      group by season_str, week, game_id, qtr, posteam 
+      order by season_str, week, game_id, qtr, posteam ")
+
+#Get points scored per quarter and total score at the end of each quarter, if the game went over
+points=sqldf("select season, week, game_id, qtr, posteam, posteam_score_post,
+            posteam_score_post+defteam_score_post as qtr_total, total,total_line, 
+            case when total > total_line then 1 else 0 end as over
+            from pbp
+            where posteam != 'NA' and defteam != 'NA'
+            group by  season, week, game_id, qtr, posteam, defteam
+            having MAX(play_id) =play_id
+            order by  season, week, game_id, qtr, posteam, defteam")
+
+
+#Add score to main data set
+off_stats1=sqldf("select a.*, b.posteam_score_post as points
+                 from off_stats a left join points b on a.season_str=b.season and
+                 a.week=b.week and a.game_id=b.game_id and a.qtr=b.qtr and a.posteam=b.posteam")
+
+
+wb <- loadWorkbook("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\template.xlsx")
+writeData(wb, sheet = "RAW", x = off_stats1)
+saveWorkbook(wb, "C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\populated_template.xlsx")
+openXL("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\populated_template.xlsx")
+
 
 write.xlsx(
-  off_stats,
+  off_stats1,
   file="C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\off_stats.xlsx",
   sheetName = "RAW",
   col.names = TRUE,
