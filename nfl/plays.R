@@ -1,6 +1,22 @@
 #Purpose of this code is to if plays regresses to points scored and over/unders
 #Date: 12/18/2021
+library(sqldf)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(nflfastR)
+library(gmodels)
 
+#Load data
+seasons <- 2010:2021
+pbp <- purrr::map_df(seasons, function(x) {
+  readRDS(
+    url(
+      glue::glue("https://raw.githubusercontent.com/guga31bb/nflfastR-data/master/data/play_by_play_{x}.rds")
+    )
+  )
+})
 
 #Only get regular season games
 #Pass and runs
