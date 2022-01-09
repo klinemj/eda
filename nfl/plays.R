@@ -27,8 +27,8 @@ pbp1 = pbp %>% filter(season_type=="REG", play_type !='no_play', play_type !='ki
   mutate(season_str = as.character(season))
 
 
-#Get number of plays and other metrics for every season, game, quarter, team
-off_stats=sqldf("select season_str, week, game_id, qtr, posteam, count(play_id)as plays, sum(rush_attempt)as runs,
+#Get number of plays and other metrics for every season, game, down, quarter, team
+off_stats=sqldf("select season_str, week, game_id, down, qtr, posteam, count(play_id)as plays, sum(rush_attempt)as runs,
       sum(pass_attempt)as passes, sum(passing_yards)as passing_yds, sum(rushing_yards)as rushing_yds,
       sum(yards_gained)as yds, sum(success)as successful_plays,
       sum(case when rush=1 then success else 0 end)as rush_success,
@@ -36,93 +36,132 @@ off_stats=sqldf("select season_str, week, game_id, qtr, posteam, count(play_id)a
       sum(case when rush=1 and rushing_yards>=10 then 1 else 0 end)as xpl_runs,
       sum(case when pass=1 and passing_yards>=15 then 1 else 0 end)as xpl_passes
       from pbp1
-      group by season_str, week, game_id, qtr, posteam 
-      order by season_str, week, game_id, qtr, posteam ")
+      where down != 'NA'
+      group by season_str, week, game_id, down, qtr, posteam 
+      order by season_str, week, game_id, down, qtr, posteam ")
 
-#Get points scored per quarter and total score at the end of each quarter, if the game went over
-points=sqldf("select season, week, game_id, qtr, posteam, posteam_score_post,
-            posteam_score_post+defteam_score_post as qtr_total, total,total_line, 
-            case when total > total_line then 1 else 0 end as over
-            from pbp
-            where posteam != 'NA' and defteam != 'NA'
-            group by  season, week, game_id, qtr, posteam, defteam
-            having MAX(play_id) =play_id
-            order by  season, week, game_id, qtr, posteam, defteam")
-
+#Get points scored per quarter and total score at the end of each quarter
+points = sqldf("select season, week, game_id, qtr, posteam, 
+               sum(case when touchdown=1 then 6 else 0 end)as td_pts,
+               sum(case when extra_point_result ='good' then 1 else 0 end) as extra_pts,
+               sum(case when two_point_conv_result ='success' then 2 else 0 end) as two_pts,
+               sum(case when field_goal_result ='made' then 3 else 0 end)as fg_pts,
+               sum(case when safety=1 then 2 else 0 end)as safety_pts,
+               sum(case when touchdown=1 then 6 else 0 end)+
+               sum(case when extra_point_result ='good' then 1 else 0 end)+
+               sum(case when two_point_conv_result ='success' then 2 else 0 end)+
+               sum(case when field_goal_result ='made' then 3 else 0 end)+
+               sum(case when safety=1 then 2 else 0 end)as pts_scored
+               from pbp
+               where posteam != 'NA' and defteam != 'NA'
+               group by season, week, game_id, qtr, posteam
+               order by season, week, game_id, qtr, posteam")
 
 #Add score to main data set
-off_stats1=sqldf("select a.*, b.posteam_score_post as points
+off_stats1=sqldf("select a.*, b.pts_scored
                  from off_stats a left join points b on a.season_str=b.season and
                  a.week=b.week and a.game_id=b.game_id and a.qtr=b.qtr and a.posteam=b.posteam")
 
-
-wb <- loadWorkbook("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\template.xlsx")
+#Save data
+wb <- loadWorkbook("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\off_stats1.xlsx")
 writeData(wb, sheet = "RAW", x = off_stats1)
-saveWorkbook(wb, "C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\populated_template.xlsx")
-openXL("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\populated_template.xlsx")
+saveWorkbook(wb, "C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\off_stats3.xlsx")
+openXL("C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\off_stats3.xlsx")
 
 
-write.xlsx(
-  off_stats1,
-  file="C:\\R Projects\\Kaggle\\nfl-scores-and-betting-data\\nflbets\\eda\\off_stats.xlsx",
-  sheetName = "RAW",
-  col.names = TRUE,
-  row.names = TRUE,
-  append = FALSE
-)
+#Get summary stats
+season_sum = sqldf("select season_str, game_id, posteam, sum(plays)as total_plays, sum(runs)as total_runs,
+                   sum(rush_success)as total_rush_success, sum(xpl_runs)as total_xpl_runs, sum(rushing_yds)as total_rushing_yds,
+                   sum(passes)as total_passes, sum(pass_success)as total_pass_success, sum(xpl_passes)as total_xpl_passes, sum(passing_yds)as total_passing_yds,
+                   sum(successful_plays)as total_successful_plays, sum(yds)as total_yds
+                   from off_stats1
+                   group by season_str, game_id, posteam
+                   order by season_str, game_id, posteam")
+#Export
+avg_plays = sqldf("select season_str, avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                  sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                  avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                  sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                  sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                  sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                  sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                  avg(total_yds)as avg_yds
+                  from season_sum
+                  group by season_str
+                  order by season_str")
+#Export
+avg_team_plays = sqldf("select season_str, posteam,avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                  sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                  avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                  sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                  sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                  sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                  sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                  avg(total_yds)as avg_yds
+                  from season_sum
+                  group by season_str, posteam
+                  order by season_str, posteam")
 
-#Get points scored per quarter and total score at the end of each quarter, if the game went over
-points=sqldf("select season, game_id, qtr, posteam, defteam, posteam_score_post,defteam_score_post,
-            posteam_score_post+defteam_score_post as qtr_total, total,total_line, 
-            case when total > total_line then 1 else 0 end as over
-            from pbp
-            where posteam != 'NA' and defteam != 'NA'
-            group by  season, game_id, qtr, posteam, defteam
-            having MAX(play_id) =play_id
-            order by  season, game_id, qtr, posteam, defteam")
+quarter_sum = sqldf("select season_str, game_id, posteam, qtr, sum(plays)as total_plays, sum(runs)as total_runs,
+                   sum(rush_success)as total_rush_success, sum(xpl_runs)as total_xpl_runs, sum(rushing_yds)as total_rushing_yds,
+                   sum(passes)as total_passes, sum(pass_success)as total_pass_success, sum(xpl_passes)as total_xpl_passes, sum(passing_yds)as total_passing_yds,
+                   sum(successful_plays)as total_successful_plays, sum(yds)as total_yds
+                   from off_stats1
+                   group by season_str, game_id, posteam, qtr
+                   order by season_str, game_id, posteam, qtr")
+#Export
+avg_qtr_plays = sqldf("select season_str, qtr, avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                  sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                  avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                  sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                  sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                  sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                  sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                  avg(total_yds)as avg_yds
+                  from quarter_sum
+                  group by season_str, qtr
+                  order by season_str, qtr")
+#Export
+avg_team_qtr_plays = sqldf("select season_str, qtr, posteam,avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                       sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                       avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                       sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                       sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                       sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                       sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                       avg(total_yds)as avg_yds
+                       from quarter_sum
+                       group by season_str, qtr, posteam
+                       order by season_str, qtr, posteam")
 
-#Get overall sec_per_play
-#Get number of plays for every season, game, team
-plays_all=sqldf("select season_str,posteam, count(play_id)as plays
-            from pbp1
-            group by season_str,posteam 
-            order by season_str,posteam ")
-
-sum_time_all=sqldf("select season_str,posteam, sum(drive_sec_of_possesion)as tot_sec_of_possession
-               from time
-               group by season_str, posteam
-               order by season_str, posteam")
-
-#Bring in plays
-time_plays_all = sqldf("select a.season_str, a.posteam, a.tot_sec_of_possession, b.plays,
-                   round(a.tot_sec_of_possession/b.plays,2) as sec_per_play
-                   from sum_time_all a left join plays_all b on a.season_str=b.season_str and 
-                   a.posteam=b.posteam
-                   group by a.season_str,a.posteam
-                   order by a.season_str,a.posteam")
-#Add sec_per_play
-time_plays_points = sqldf("select a.*, b.plays, b.tot_sec_of_possession, b.sec_per_play
-                          from points a left join time_plays b on a.game_id=b.game_id and a.qtr=b.qtr and 
-                          a.posteam=b.posteam")
-
-test= pbp %>% filter(game_id=='2021_01_GB_NO')
-write.csv(time_plays_points,"C:/R Projects/Kaggle/nfl-scores-and-betting-data/nflbets/eda/sec_per_play.csv")
-write.csv(time_plays_all,"C:/R Projects/Kaggle/nfl-scores-and-betting-data/nflbets/eda/sec_per_play_all.csv")
-
-#Get over under for every game
-ou = sqldf("select distinct season, game_id, posteam, posteam_score_post,total, total_line, over
-              from points
-              where qtr=4")
-over = sqldf("select season, posteam,avg(posteam_score_post)as avg_pts_scored, avg(total) as avg_total, avg(total_line) as avg_total_line,
-              sum(cast(over as decimal)) overs,
-              count(game_id)as games
-              from ou
-              group by season, posteam
-              order by season, posteam")
-over1 = over %>% mutate(over_pct =overs/games)
-
-#Add to sec per play
-pace_overs = sqldf("select a.*, b.avg_pts_scored,b.avg_total, b.avg_total_line, b.overs, b.games, b.over_pct
-                  from time_plays_all a left join over1 b on a.season_str=b.season and a.posteam=b.posteam")
-write.csv(pace_overs,"C:/R Projects/Kaggle/nfl-scores-and-betting-data/nflbets/eda/sec_per_play_all.csv")
-
+down_sum = sqldf("select season_str, game_id, posteam, down, sum(plays)as total_plays, sum(runs)as total_runs,
+                   sum(rush_success)as total_rush_success, sum(xpl_runs)as total_xpl_runs, sum(rushing_yds)as total_rushing_yds,
+                    sum(passes)as total_passes, sum(pass_success)as total_pass_success, sum(xpl_passes)as total_xpl_passes, sum(passing_yds)as total_passing_yds,
+                    sum(successful_plays)as total_successful_plays, sum(yds)as total_yds
+                    from off_stats1
+                    group by season_str, game_id, posteam, down
+                    order by season_str, game_id, posteam, down")
+#Export
+avg_down_plays = sqldf("select season_str, down, avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                  sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                  avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                  sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                  sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                  sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                  sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                  avg(total_yds)as avg_yds
+                  from down_sum
+                  group by season_str, down
+                  order by season_str, down")
+#Export
+avg_team_down_plays = sqldf("select season_str, down, posteam,avg(total_plays)as avg_plays, sum(total_runs)/sum(total_plays)as avg_run_pct,
+                       sum(total_rush_success)/sum(total_runs)as avg_rush_success, sum(total_xpl_runs)/sum(total_runs)as avg_xpl_run_rate,
+                       avg(total_rushing_yds)as avg_rushing_yds, sum(total_rushing_yds)/sum(total_runs)as avg_ypr,
+                       sum(total_passes)/sum(total_plays)as avg_pass_pct, sum(total_pass_success)/sum(total_passes)as avg_pass_success,
+                       sum(total_xpl_passes)/sum(total_passes)as avg_xpl_pass_rate, avg(total_passing_yds)as avg_passing_yds,
+                       sum(total_passing_yds)/sum(total_passes)as avg_ypa, sum(total_yds)/sum(total_plays)as avg_ypp,
+                       sum(total_successful_plays)/sum(total_plays)as avg_success_rate,
+                       avg(total_yds)as avg_yds
+                       from down_sum
+                       group by season_str, down, posteam
+                       order by season_str, down, posteam")
